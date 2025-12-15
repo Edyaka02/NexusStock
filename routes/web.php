@@ -1,136 +1,127 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Http\Request;
+// Importamos tus Modelos y Controladores nuevos
+use App\Http\Controllers\ProductController;
+use App\Models\Product;
+use App\Models\InventoryMovement;
+use App\Models\AuditLog;
+use App\Models\User;
+
+/*
+|--------------------------------------------------------------------------
+| Web Routes
+|--------------------------------------------------------------------------
+|
+| Aquí conectamos las URLs con tu Backend (ProductController).
+|
+*/
 
 Route::get('/', function () {
-    return view('welcome');
+    return redirect()->route('dashboard.index');
 });
 
-Route::get('/login', function () {
-    return view('auth.login');
-})->name('login');
+// Rutas de Autenticación (Básicas, usan las vistas que ya tienen)
+Route::get('/login', function () { return view('auth.login'); })->name('login');
+Route::post('/login', function () { return redirect('/dashboard'); });
+Route::post('/logout', function () { return redirect('/login'); })->name('logout');
+Route::get('/register', function () { return view('auth.register'); })->name('register');
+Route::post('/register', function () { return redirect('/dashboard'); });
 
-Route::post('/login', function () {
-    // Placeholder: redirigir a dashboard
-    return redirect('/dashboard');
-});
-
-Route::post('/logout', function () {
-    // Placeholder: redirigir a login
-    return redirect('/login');
-})->name('logout');
-
-Route::get('/register', function () {
-    return view('auth.register');
-})->name('register');
-
-Route::post('/register', function () {
-    // Placeholder: redirigir a dashboard
-    return redirect('/dashboard');
-});
-
-// Rutas protegidas (simplificadas, sin middleware auth por ahora)
+// =========================================================================
+// DASHBOARD (Ahora con DATOS REALES de SQL Server)
+// =========================================================================
 Route::get('/dashboard', function () {
-    // Placeholder data
-    $totalProducts = 10;
-    $lowStockCount = 2;
-    $movementsToday = 5;
-    $totalValue = 1500.00;
-    $lowStockProducts = collect([]); // Placeholder
+    // 1. Contamos productos reales
+    $totalProducts = Product::count();
+    
+    // 2. Buscamos productos con stock bajo (menor o igual al min_stock o 5)
+    $lowStockProducts = Product::whereColumn('stock', '<=', 'min_stock')->get();
+    $lowStockCount = $lowStockProducts->count();
+    
+    // 3. Movimientos de hoy (SQL Server usa GETDATE, Laravel lo maneja)
+    $movementsToday = InventoryMovement::whereDate('created_at', today())->count();
+    
+    // 4. Valor total del inventario (Precio * Stock)
+    // Se hace en PHP para evitar complejidad de query si SQL Server varía versión
+    $totalValue = Product::all()->sum(function($prod) {
+        return $prod->price * $prod->stock;
+    });
+
     return view('dashboard.index', compact('totalProducts', 'lowStockCount', 'movementsToday', 'totalValue', 'lowStockProducts'));
 })->name('dashboard.index');
 
 
-// Productos
-Route::get('/products', function () {
-    $products = collect([]); // Placeholder paginated
-    return view('products.index', compact('products'));
-})->name('products.index');
+// =========================================================================
+// RUTAS DE PRODUCTOS (Conectadas a tu ProductController)
+// =========================================================================
 
-Route::get('/products/create', function () {
-    return view('products.create');
-})->name('products.create');
+// Listar productos
+Route::get('/products', [ProductController::class, 'index'])->name('products.index');
 
-Route::post('/products', function () {
-    // Placeholder: redirigir a index
-    return redirect('/products');
-})->name('products.store');
+// Ver formulario de crear (Si Valery lo hizo, si no, da igual tenerlo)
+Route::view('/products/create', 'products.create')->name('products.create');
 
-Route::get('/products/{id}', function ($id) {
-    $product = (object)['id' => $id, 'sku' => 'SKU001', 'name' => 'Producto Ejemplo', 'description' => 'Descripción', 'price' => 100, 'stock' => 5, 'min_stock' => 2, 'created_at' => now(), 'updated_at' => now()];
-    $recentMovements = collect([]); // Placeholder
-    return view('products.show', compact('product', 'recentMovements'));
-})->name('products.show');
+// Guardar nuevo producto
+Route::post('/products', [ProductController::class, 'store'])->name('products.store');
 
+// Ver detalle de producto
+Route::get('/products/{id}', [ProductController::class, 'show'])->name('products.show');
+
+// Editar producto (Placeholder: muestra la vista, pero el update redirige)
 Route::get('/products/{id}/edit', function ($id) {
-    $product = (object)['id' => $id, 'sku' => 'SKU001', 'name' => 'Producto Ejemplo', 'description' => 'Descripción', 'price' => 100, 'stock' => 5, 'min_stock' => 2];
+    $product = Product::findOrFail($id);
     return view('products.edit', compact('product'));
 })->name('products.edit');
 
 Route::put('/products/{id}', function ($id) {
-    // Placeholder: redirigir a show
-    return redirect("/products/{$id}");
+    // Si tienes tiempo, puedes agregar el método 'update' en tu controlador
+    return redirect()->route('products.index'); 
 })->name('products.update');
 
 Route::delete('/products/{id}', function ($id) {
-    // Placeholder: redirigir a index
-    return redirect('/products');
+    // Si tienes tiempo, agrega 'destroy' en tu controlador
+    return redirect()->route('products.index');
 })->name('products.destroy');
 
-// Inventario
-Route::get('/inventory/movements', function () {
-    $movements = collect([]); // Placeholder
-    $products = collect([]); // Placeholder
-    return view('inventory.movements', compact('movements', 'products'));
-})->name('inventory.movements');
 
+// =========================================================================
+// RUTAS DE INVENTARIO Y TRANSACCIONES
+// =========================================================================
+
+// Esta es la ruta CRÍTICA para la evaluación: COMPRA y VENTA
+Route::post('/transaction', [ProductController::class, 'transaction'])->name('inventory.transaction');
+
+// Pantalla para hacer movimientos manuales
 Route::get('/inventory/new-movement', function () {
-    $products = collect([]); // Placeholder
+    $products = Product::all(); // Pasamos productos reales para el select
     return view('inventory.new-movement', compact('products'));
 })->name('inventory.new-movement');
 
-Route::post('/inventory/store-movement', function () {
-    // Placeholder: redirigir a movements
-    return redirect('/inventory/movements');
-})->name('inventory.store-movement');
+// Historial de movimientos
+Route::get('/inventory/movements', function () {
+    $movements = InventoryMovement::with(['product', 'user'])->orderBy('created_at', 'desc')->get();
+    return view('inventory.movements', compact('movements'));
+})->name('inventory.movements');
 
-// Auditoría
+
+// =========================================================================
+// OTRAS RUTAS (Auditoría y Usuarios)
+// =========================================================================
 Route::get('/audit/logs', function () {
-    $logs = collect([]); // Placeholder
+    $logs = AuditLog::orderBy('created_at', 'desc')->get();
     return view('audit.logs', compact('logs'));
 })->name('audit.logs');
 
-// Usuarios
 Route::get('/users', function () {
-    $users = collect([]); // Placeholder
+    $users = User::all();
     return view('users.index', compact('users'));
 })->name('users.index');
 
-Route::get('/users/create', function () {
-    return view('users.create');
-})->name('users.create');
-
-Route::post('/users', function () {
-    // Placeholder: redirigir a index
-    return redirect('/users');
-})->name('users.store');
-
-Route::get('/users/{id}/edit', function ($id) {
-    $user = (object)['id' => $id, 'name' => 'Usuario Ejemplo', 'email' => 'user@example.com', 'role' => 'employee'];
-    return view('users.edit', compact('user'));
-})->name('users.edit');
-
-Route::put('/users/{id}', function ($id) {
-    // Placeholder: redirigir a index
-    return redirect('/users');
-})->name('users.update');
-
-Route::delete('/users/{id}', function ($id) {
-    // Placeholder: redirigir a index
-    return redirect('/users');
-})->name('users.destroy');
-
-// Redirigir raíz
-Route::get('/', function () {
-    return redirect('/dashboard');
-});
+// Rutas placeholder para crear usuarios (para que no den error 404)
+Route::view('/users/create', 'users.create')->name('users.create');
+Route::post('/users', function() { return redirect('/users'); })->name('users.store');
+Route::get('/users/{id}/edit', function() { return redirect('/users'); })->name('users.edit');
+Route::put('/users/{id}', function() { return redirect('/users'); })->name('users.update');
+Route::delete('/users/{id}', function() { return redirect('/users'); })->name('users.destroy');
